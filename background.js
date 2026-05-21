@@ -77,7 +77,7 @@ async function storageRemove(key) {
 // ---------------------------------------------------------------------------
 // Embedding cache
 // ---------------------------------------------------------------------------
-const EMBEDDING_CACHE_KEY = "intent-lock:embedding-cache";
+const EMBEDDING_CACHE_KEY = "intent-lock:embedding-cache-v2";
 const EMBEDDING_CACHE_MAX_SIZE = 250;
 
 async function getCachedEmbedding(textHash) {
@@ -105,7 +105,7 @@ async function hashText(text) {
 }
 
 // ---------------------------------------------------------------------------
-// ML model (Xenova/all-MiniLM-L6-v2 via Transformers.js)
+// ML model (Xenova/bge-small-en-v1.5 via Transformers.js)
 // ---------------------------------------------------------------------------
 let pipelinePromise = null;
 
@@ -121,7 +121,7 @@ async function getEmbeddingPipeline() {
       async ({ env, pipeline }) => {
         env.allowLocalModels = false;
         env.allowRemoteModels = true;
-        return await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+        return await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5");
       },
     );
   }
@@ -170,16 +170,15 @@ function cosineSimilarity(vecA, vecB) {
 
 function similarityToAlignmentScore(goalVec, pageVec) {
   const raw = cosineSimilarity(goalVec, pageVec);
-  const LOW_CLIP  = 0.18;
-  const HIGH_CLIP = 0.62;
+  const LOW_CLIP  = 0.22;
+  const HIGH_CLIP = 0.80;
   const normalized = Math.min(1, Math.max(0, (raw - LOW_CLIP) / (HIGH_CLIP - LOW_CLIP)));
-  // S-curve: compress extremes, expand the middle
-  const curved = normalized < 0.5
-    ? 0.5 * Math.pow(normalized / 0.5, 1.35)
-    : 1 - 0.5 * Math.pow((1 - normalized) / 0.5, 1.35);
+  const curved = normalized < 0.5? 
+      0.5 * Math.pow(normalized / 0.5, 1.1):
+      1 - 0.5 * Math.pow((1 - normalized) / 0.5, 1.1);
   return Math.round(Math.min(100, Math.max(0, curved * 100)));
 }
-
+  
 // ---------------------------------------------------------------------------
 // Analytics (Supabase — disabled until credentials are provided)
 // ---------------------------------------------------------------------------
@@ -293,6 +292,27 @@ function isBrowserInternalUrl(url) {
   return url ? /^(chrome|edge|brave|about|file|view-source):/i.test(url) : true;
 }
 
+// Hard blocklist domains and their subdomains. These bypass semantic scoring
+// completely so explicitly distracting sites are blocked deterministically.
+const HARD_BLOCKLIST = [
+  "facebook.com",
+  "instagram.com",
+  "twitter.com",
+  "x.com",
+  "tiktok.com",
+  "amazon.com",
+  "netflix.com",
+  "temu.com",
+  "twitch.tv",
+];
+
+function isHardBlocklisted(url) {
+  const domain = extractDomain(url).toLowerCase();
+  return HARD_BLOCKLIST.some(
+    (blocked) => domain === blocked || domain.endsWith("." + blocked),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Drift detection thresholds
 // ---------------------------------------------------------------------------
@@ -399,7 +419,9 @@ async function startSession(goal) {
   const existing = await loadSession();
   if (existing) await logSessionEnd(existing);
   await warmUpModel();
+  goal = "Represent this sentence for searching relevant passages: " + goal
   const goalEmbedding = await embedText(goal);
+  console.log(goal);
   if (!goalEmbedding.length)
     return { ok: false, error: "Could not generate an embedding for that goal." };
   const session = {
@@ -478,11 +500,19 @@ async function sendBlockMessage(tabId, session, score) {
 async function evaluatePage(pageSummary, tabId) {
   const session = await loadSession();
   if (!session || isBrowserInternalUrl(pageSummary.url)) return;
-  try {
-    const pageEmbedding = await embedText(pageSummary.text);
-    if (!pageEmbedding.length) return;
 
-    const score = similarityToAlignmentScore(session.goalEmbedding, pageEmbedding);
+  try {
+    let score = 0;
+    const isBlocked = isHardBlocklisted(pageSummary.url);
+
+    if (isBlocked) {
+      score = 0;
+    } else {
+      const pageEmbedding = await embedText(pageSummary.text);
+      if (!pageEmbedding.length) return;
+      score = similarityToAlignmentScore(session.goalEmbedding, pageEmbedding);
+    }
+
     const pageEvent = {
       id: crypto.randomUUID(),
       sessionId: session.sessionId,
@@ -510,7 +540,9 @@ async function evaluatePage(pageSummary, tabId) {
     if (driftResult.shouldNotify) {
       logDriftEvent(
         session.sessionId,
-        driftResult.triggerReason ?? "Sustained low-alignment browsing",
+        isBlocked
+          ? `Visited hard-blocklisted domain: ${pageEvent.domain}`
+          : driftResult.triggerReason ?? "Sustained low-alignment browsing",
       );
       await sendDriftNotification(updatedSession);
     }

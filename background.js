@@ -1,69 +1,5 @@
-import * as _transformersModule from "./chunks/transformers.web-C0dh_jD5.js";
-
-// ---------------------------------------------------------------------------
-// Vite module-preload polyfill (do not modify)
-// ---------------------------------------------------------------------------
-const MODULE_PRELOAD_REL = "modulepreload";
-const resolvePath = function (t) { return "/" + t; };
-const preloadedModules = {};
-const vitePreload = function (loadFn, deps, baseUrl) {
-  let readyPromise = Promise.resolve();
-  if (deps && deps.length > 0) {
-    let allSettled = function (promises) {
-      return Promise.all(
-        promises.map((p) =>
-          Promise.resolve(p).then(
-            (v) => ({ status: "fulfilled", value: v }),
-            (e) => ({ status: "rejected", reason: e }),
-          ),
-        ),
-      );
-    };
-    var settled = allSettled;
-    document.getElementsByTagName("link");
-    const nonceMeta = document.querySelector("meta[property=csp-nonce]");
-    const nonce = nonceMeta?.nonce || nonceMeta?.getAttribute("nonce");
-    readyPromise = allSettled(
-      deps.map((dep) => {
-        if (((dep = resolvePath(dep)), dep in preloadedModules)) return;
-        preloadedModules[dep] = true;
-        const isCSS = dep.endsWith(".css");
-        const cssSelector = isCSS ? '[rel="stylesheet"]' : "";
-        if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) return;
-        const link = document.createElement("link");
-        if (
-          ((link.rel = isCSS ? "stylesheet" : MODULE_PRELOAD_REL),
-          isCSS || (link.as = "script"),
-          (link.crossOrigin = ""),
-          (link.href = dep),
-          nonce && link.setAttribute("nonce", nonce),
-          document.head.appendChild(link),
-          isCSS)
-        )
-          return new Promise((resolve, reject) => {
-            link.addEventListener("load", resolve);
-            link.addEventListener("error", () =>
-              reject(new Error(`Unable to preload CSS for ${dep}`)),
-            );
-          });
-      }),
-    );
-  }
-  function throwPreloadError(err) {
-    const event = new Event("vite:preloadError", { cancelable: true });
-    if (((event.payload = err), window.dispatchEvent(event), !event.defaultPrevented))
-      throw err;
-  }
-  return readyPromise.then((results) => {
-    for (const result of results || [])
-      result.status === "rejected" && throwPreloadError(result.reason);
-    return loadFn().catch(throwPreloadError);
-  });
-};
-
-// ---------------------------------------------------------------------------
-// Chrome storage helpers
-// ---------------------------------------------------------------------------
+import { f as getGoalPreset } from "./chunks/goalPresets-2bmHbkX7.js";
+import { env as transformersEnv, pipeline as createPipeline } from "./chunks/transformers.web-C0dh_jD5.js";
 async function storageGet(key) {
   return (await chrome.storage.local.get(key))[key];
 }
@@ -73,176 +9,125 @@ async function storageSet(key, value) {
 async function storageRemove(key) {
   await chrome.storage.local.remove(key);
 }
-
-// ---------------------------------------------------------------------------
-// Embedding cache
-// ---------------------------------------------------------------------------
-const EMBEDDING_CACHE_KEY = "intent-lock:embedding-cache-v2";
-const EMBEDDING_CACHE_MAX_SIZE = 250;
-
+const EMBEDDING_CACHE_KEY = "intent-lock:embedding-cache-v2",
+  EMBEDDING_CACHE_MAX = 250;
 async function getCachedEmbedding(textHash) {
   return ((await storageGet(EMBEDDING_CACHE_KEY)) ?? {})[textHash]?.embedding ?? null;
 }
-
 async function setCachedEmbedding(textHash, embedding) {
   const cache = (await storageGet(EMBEDDING_CACHE_KEY)) ?? {};
-  cache[textHash] = { textHash, embedding, timestamp: Date.now() };
-  const trimmed = Object.fromEntries(
-    Object.values(cache)
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, EMBEDDING_CACHE_MAX_SIZE)
-      .map((entry) => [entry.textHash, entry]),
-  );
+  cache[textHash] = { textHash: textHash, embedding: embedding, timestamp: Date.now() };
+  const sorted = Object.values(cache).sort((a, b) => b.timestamp - a.timestamp),
+    trimmed = Object.fromEntries(sorted.slice(0, EMBEDDING_CACHE_MAX).map((entry) => [entry.textHash, entry]));
   await storageSet(EMBEDDING_CACHE_KEY, trimmed);
 }
-
 async function hashText(text) {
-  const encoded = new TextEncoder().encode(text);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const encoded = new TextEncoder().encode(text),
+    hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
   return [...new Uint8Array(hashBuffer)]
-    .map((b) => b.toString(16).padStart(2, "0"))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
-
-// ---------------------------------------------------------------------------
-// ML model (Xenova/bge-small-en-v1.5 via Transformers.js)
-// ---------------------------------------------------------------------------
-let pipelinePromise = null;
-
-function polyfillWindowForServiceWorker() {
-  const global = globalThis;
-  global.window ??= globalThis;
-}
-
+let transformersPipeline = null;
 async function getEmbeddingPipeline() {
-  if (!pipelinePromise) {
-    polyfillWindowForServiceWorker();
-    pipelinePromise = Promise.resolve(_transformersModule).then(
-      async ({ env, pipeline }) => {
-        env.allowLocalModels = false;
-        env.allowRemoteModels = true;
-        return await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5");
-      },
-    );
+  if (!transformersPipeline) {
+    transformersEnv.allowLocalModels = !1;
+    transformersEnv.allowRemoteModels = !0;
+    transformersPipeline = await createPipeline("feature-extraction", "Xenova/bge-small-en-v1.5");
   }
-  return pipelinePromise;
+  return transformersPipeline;
 }
-
-function tensorToNumberArray(tensor) {
-  return Array.isArray(tensor)
-    ? tensor.map(Number)
-    : Array.from(tensor.data, Number);
+function extractEmbeddingArray(output) {
+  return Array.isArray(output) ? output.map(Number) : Array.from(output.data, Number);
 }
-
-async function embedText(text) {
+async function getTextEmbedding(text) {
   const normalized = text.trim().replace(/\s+/g, " ");
   if (!normalized) return [];
-  const hash = await hashText(normalized);
-  const cached = await getCachedEmbedding(hash);
+  const textHash = await hashText(normalized),
+    cached = await getCachedEmbedding(textHash);
   if (cached) return cached;
-  const result = await (await getEmbeddingPipeline())(normalized, {
-    pooling: "mean",
-    normalize: true,
-  });
-  const vector = tensorToNumberArray(result);
-  await setCachedEmbedding(hash, vector);
-  return vector;
+  const pipelineOutput = await (await getEmbeddingPipeline())(normalized, { pooling: "mean", normalize: !0 }),
+    embeddingArray = extractEmbeddingArray(pipelineOutput);
+  return (await setCachedEmbedding(textHash, embeddingArray), embeddingArray);
 }
-
-async function warmUpModel() {
+async function warmUpEmbeddingPipeline() {
   await getEmbeddingPipeline();
 }
-
-// ---------------------------------------------------------------------------
-// Scoring
-// ---------------------------------------------------------------------------
 function cosineSimilarity(vecA, vecB) {
-  if (vecA.length === 0 || vecB.length === 0 || vecA.length !== vecB.length)
-    return 0;
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < vecA.length; i += 1) {
-    dot  += vecA[i] * vecB[i];
-    magA += vecA[i] * vecA[i];
-    magB += vecB[i] * vecB[i];
-  }
-  return magA === 0 || magB === 0 ? 0 : dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  if (vecA.length === 0 || vecB.length === 0 || vecA.length !== vecB.length) return 0;
+  let dotProduct = 0,
+    magA = 0,
+    magB = 0;
+  for (let idx = 0; idx < vecA.length; idx += 1)
+    ((dotProduct += vecA[idx] * vecB[idx]), (magA += vecA[idx] * vecA[idx]), (magB += vecB[idx] * vecB[idx]));
+  return magA === 0 || magB === 0 ? 0 : dotProduct / (Math.sqrt(magA) * Math.sqrt(magB));
 }
-
-function similarityToAlignmentScore(goalVec, pageVec) {
-  const raw = cosineSimilarity(goalVec, pageVec);
-  const LOW_CLIP  = 0.22;
-  const HIGH_CLIP = 0.80;
-  const normalized = Math.min(1, Math.max(0, (raw - LOW_CLIP) / (HIGH_CLIP - LOW_CLIP)));
-  const curved = normalized < 0.5? 
-      0.5 * Math.pow(normalized / 0.5, 1.1):
-      1 - 0.5 * Math.pow((1 - normalized) / 0.5, 1.1);
+function computeAlignmentScore(goalEmbedding, pageEmbedding) {
+  const similarity = cosineSimilarity(goalEmbedding, pageEmbedding),
+    minThreshold = 0.35,
+    normalized = Math.min(1, Math.max(0, (similarity - minThreshold) / (0.85 - minThreshold))),
+    curved =
+      normalized < 0.5
+        ? 0.5 * Math.pow(normalized / 0.5, 1.35)
+        : 1 - 0.5 * Math.pow((1 - normalized) / 0.5, 1.35);
   return Math.round(Math.min(100, Math.max(0, curved * 100)));
 }
-  
-// ---------------------------------------------------------------------------
-// Analytics (Supabase — disabled until credentials are provided)
-// ---------------------------------------------------------------------------
-const ANALYTICS_QUEUE_KEY = "intent-lock:analytics-queue";
-const SUPABASE_URL = void 0;  // set to your Supabase project URL to enable
-const SUPABASE_ANON_KEY = void 0;
-
+const ANALYTICS_QUEUE_KEY = "intent-lock:analytics-queue",
+  SUPABASE_URL = void 0,
+  SUPABASE_KEY = void 0;
 function isAnalyticsEnabled() {
   return !!SUPABASE_URL;
 }
-
 async function enqueueAnalyticsEvent(event) {
   const queue = (await storageGet(ANALYTICS_QUEUE_KEY)) ?? [];
   await storageSet(ANALYTICS_QUEUE_KEY, [...queue, event].slice(-500));
 }
-
-async function postToSupabase(table, payload) {
-  if (!isAnalyticsEnabled()) return false;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify(payload),
-  });
-  return res.ok;
+async function sendToSupabase(table, payload) {
+  return isAnalyticsEnabled()
+    ? (
+        await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+          method: "POST",
+          headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=minimal",
+          },
+          body: JSON.stringify(payload),
+        })
+      ).ok
+    : !1;
 }
-
-async function logAnalyticsEvent(eventType, table, payload) {
+async function trackAnalyticsEvent(eventType, table, payload) {
   try {
-    (await postToSupabase(table, payload)) ||
-      (await enqueueAnalyticsEvent({ type: eventType, payload, createdAt: Date.now() }));
+    (await sendToSupabase(table, payload)) ||
+      (await enqueueAnalyticsEvent({ type: eventType, payload: payload, createdAt: Date.now() }));
   } catch {
-    await enqueueAnalyticsEvent({ type: eventType, payload, createdAt: Date.now() });
+    await enqueueAnalyticsEvent({ type: eventType, payload: payload, createdAt: Date.now() });
   }
 }
-
-async function logSessionStart(session) {
-  await logAnalyticsEvent("session", "sessions", {
+async function trackSessionStart(session) {
+  await trackAnalyticsEvent("session", "sessions", {
     id: session.sessionId,
     goal: session.goal,
     start_time: new Date(session.startTime).toISOString(),
     avg_score: session.currentAlignmentScore,
   });
 }
-
-async function logSessionEnd(session) {
-  const avg = session.recentScores.length
-    ? session.recentScores.reduce((sum, s) => sum + s, 0) / session.recentScores.length
+async function trackSessionEnd(session) {
+  const avgScore = session.recentScores.length
+    ? session.recentScores.reduce((sum, score) => sum + score, 0) / session.recentScores.length
     : session.currentAlignmentScore;
-  await logAnalyticsEvent("session", "sessions", {
+  await trackAnalyticsEvent("session", "sessions", {
     id: session.sessionId,
     goal: session.goal,
     start_time: new Date(session.startTime).toISOString(),
     end_time: new Date().toISOString(),
-    avg_score: avg,
+    avg_score: avgScore,
   });
 }
-
-async function logPageEvent(event) {
-  await logAnalyticsEvent("event", "events", {
+async function trackPageEvent(event) {
+  await trackAnalyticsEvent("event", "events", {
     id: event.id,
     session_id: event.sessionId,
     timestamp: new Date(event.timestamp).toISOString(),
@@ -250,18 +135,17 @@ async function logPageEvent(event) {
     domain: event.domain,
     score: event.score,
     drift_state: event.driftState,
+    decision: event.decision,
   });
 }
-
-async function logDriftEvent(sessionId, triggerReason) {
-  await logAnalyticsEvent("drift_event", "drift_events", {
+async function trackDriftEvent(sessionId, triggerReason) {
+  await trackAnalyticsEvent("drift_event", "drift_events", {
     id: crypto.randomUUID(),
     session_id: sessionId,
     timestamp: new Date().toISOString(),
     trigger_reason: triggerReason,
   });
 }
-
 async function flushAnalyticsQueue() {
   const queue = (await storageGet(ANALYTICS_QUEUE_KEY)) ?? [];
   if (!queue.length || !isAnalyticsEnabled()) return;
@@ -269,17 +153,13 @@ async function flushAnalyticsQueue() {
   for (const item of queue) {
     const table = item.type === "drift_event" ? "drift_events" : `${item.type}s`;
     try {
-      (await postToSupabase(table, item.payload)) || failed.push(item);
+      (await sendToSupabase(table, item.payload)) || failed.push(item);
     } catch {
       failed.push(item);
     }
   }
   await storageSet(ANALYTICS_QUEUE_KEY, failed);
 }
-
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
 function extractDomain(url) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -287,41 +167,32 @@ function extractDomain(url) {
     return "unknown";
   }
 }
-
-function isBrowserInternalUrl(url) {
-  return url ? /^(chrome|edge|brave|about|file|view-source):/i.test(url) : true;
+function isInternalUrl(url) {
+  return url ? /^(chrome|edge|brave|about|file|view-source):/i.test(url) : !0;
 }
-
-// Hard blocklist domains and their subdomains. These bypass semantic scoring
-// completely so explicitly distracting sites are blocked deterministically.
-const HARD_BLOCKLIST = [
-  "facebook.com",
-  "instagram.com",
-  "twitter.com",
-  "x.com",
-  "tiktok.com",
-  "amazon.com",
-  "netflix.com",
-  "temu.com",
-  "twitch.tv",
-];
-
-function isHardBlocklisted(url) {
-  const domain = extractDomain(url).toLowerCase();
-  return HARD_BLOCKLIST.some(
-    (blocked) => domain === blocked || domain.endsWith("." + blocked),
-  );
+function normalizeDomain(url) {
+  return url
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0];
 }
-
-// ---------------------------------------------------------------------------
-// Drift detection thresholds
-// ---------------------------------------------------------------------------
-const DRIFT_SCORE_THRESHOLD       = 55;   // below this = low alignment
-const FOCUS_SCORE_THRESHOLD       = 72;   // above this = confirmed focus
-const ROLLING_LOW_PAGES_REQUIRED  = 2;    // min consecutive low-score pages
-const ROLLING_LOW_DURATION_MS     = 45 * 1000; // must sustain for 45s
-
-function takeWhileFromEnd(arr, predicate) {
+function domainMatchesList(domain, list) {
+  const normalizedDomain = normalizeDomain(domain);
+  return list.some((entry) => {
+    const normalizedEntry = normalizeDomain(entry);
+    return normalizedDomain === normalizedEntry || normalizedDomain.endsWith(`.${normalizedEntry}`);
+  });
+}
+function deduplicateDomains(domains) {
+  return [...new Set(domains.map(normalizeDomain).filter(Boolean))];
+}
+const DRIFT_SCORE_THRESHOLD = 55,
+  FOCUS_SCORE_THRESHOLD = 72,
+  MIN_LOW_SCORE_EVENTS = 2,
+  LOW_SCORE_DURATION_MS = 45 * 1e3;
+function takeWhile(arr, predicate) {
   const result = [];
   for (const item of arr) {
     if (!predicate(item)) break;
@@ -329,105 +200,102 @@ function takeWhileFromEnd(arr, predicate) {
   }
   return result;
 }
-
-function appendPageEvent(session, pageEvent) {
+function appendSessionEvent(session, event) {
   return {
     ...session,
-    currentAlignmentScore: pageEvent.score,
-    recentScores: [...session.recentScores, pageEvent.score].slice(-20),
-    recentEvents: [...session.recentEvents, pageEvent].slice(-20),
+    currentAlignmentScore: event.score,
+    recentScores: [...session.recentScores, event.score].slice(-20),
+    recentEvents: [...session.recentEvents, event].slice(-20),
   };
 }
-
 function evaluateDriftState(session, now = Date.now()) {
-  const scores = session.recentScores;
-  const events = session.recentEvents;
-  const avgScore = scores.length
-    ? scores.reduce((sum, s) => sum + s, 0) / scores.length
-    : 100;
-
-  // consecutive low-score pages (from most recent backwards)
-  const recentLowPages = takeWhileFromEnd(
-    [...events].reverse(),
-    (e) => e.score < DRIFT_SCORE_THRESHOLD,
-  );
-  const oldestLowPage = recentLowPages.at(-1);
-  const lowStreakDurationMs = oldestLowPage ? now - oldestLowPage.timestamp : 0;
-
-  const latestScore = scores.at(-1) ?? 100;
-  const isHardDrift    = latestScore < DRIFT_SCORE_THRESHOLD;
-  const isRollingDrift =
-    avgScore < DRIFT_SCORE_THRESHOLD &&
-    recentLowPages.length >= ROLLING_LOW_PAGES_REQUIRED &&
-    lowStreakDurationMs > ROLLING_LOW_DURATION_MS;
-
-  if (isHardDrift || isRollingDrift) {
-    return {
-      driftState: "DRIFT_CONFIRMED",
-      shouldNotify:
-        now >= session.notificationCooldownUntil &&
-        session.driftState !== "DRIFT_CONFIRMED",
-      triggerReason: isHardDrift
-        ? `Immediate hard drift: latest score ${latestScore}`
-        : `Rolling average ${avgScore.toFixed(1)} with ${recentLowPages.length} low-score pages for ${Math.round(lowStreakDurationMs / 1000)} seconds`,
-    };
-  }
-  if (avgScore < DRIFT_SCORE_THRESHOLD || recentLowPages.length >= 2)
-    return { driftState: "POSSIBLE_DRIFT", shouldNotify: false };
-  if (avgScore >= FOCUS_SCORE_THRESHOLD)
-    return { driftState: "ACTIVE_FOCUS", shouldNotify: false };
-  return { driftState: session.driftState, shouldNotify: false };
+  const scores = session.recentScores,
+    events = session.recentEvents,
+    avgScore = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 100,
+    consecutiveLowScoreEvents = takeWhile([...events].reverse(), (event) => event.score < DRIFT_SCORE_THRESHOLD),
+    oldestLowScoreEvent = consecutiveLowScoreEvents.at(-1),
+    lowScoreDurationMs = oldestLowScoreEvent ? now - oldestLowScoreEvent.timestamp : 0,
+    latestScore = scores.at(-1) ?? 100,
+    isImmediateDrift = latestScore < DRIFT_SCORE_THRESHOLD,
+    isSustainedDrift = avgScore < DRIFT_SCORE_THRESHOLD && consecutiveLowScoreEvents.length >= MIN_LOW_SCORE_EVENTS && lowScoreDurationMs > LOW_SCORE_DURATION_MS;
+  return isImmediateDrift || isSustainedDrift
+    ? {
+        driftState: "DRIFT_CONFIRMED",
+        shouldNotify:
+          now >= session.notificationCooldownUntil &&
+          session.driftState !== "DRIFT_CONFIRMED",
+        triggerReason: isImmediateDrift
+          ? `Immediate hard drift: latest score ${latestScore}`
+          : `Rolling average ${avgScore.toFixed(1)} with ${consecutiveLowScoreEvents.length} low-score pages for ${Math.round(lowScoreDurationMs / 1e3)} seconds`,
+      }
+    : avgScore < DRIFT_SCORE_THRESHOLD || consecutiveLowScoreEvents.length >= 2
+      ? { driftState: "POSSIBLE_DRIFT", shouldNotify: !1 }
+      : avgScore >= FOCUS_SCORE_THRESHOLD
+        ? { driftState: "ACTIVE_FOCUS", shouldNotify: !1 }
+        : { driftState: session.driftState, shouldNotify: !1 };
 }
-
-// ---------------------------------------------------------------------------
-// Session storage
-// ---------------------------------------------------------------------------
-const ACTIVE_SESSION_KEY = "intent-lock:active-session";
-const DRIFT_NOTIFICATION_ID = "intent-lock-drift";
-const NOTIFICATION_COOLDOWN_MS = 120 * 1000;
-const BLOCK_SCORE_THRESHOLD = 58;
-
-async function loadSession() {
-  return (await storageGet(ACTIVE_SESSION_KEY)) ?? null;
+const ACTIVE_SESSION_KEY = "intent-lock:active-session",
+  DRIFT_NOTIFICATION_ID = "intent-lock-drift",
+  NOTIFICATION_COOLDOWN_MS = 120 * 1e3,
+  BLOCK_SCORE_THRESHOLD = 58;
+async function getActiveSession() {
+  const raw = (await storageGet(ACTIVE_SESSION_KEY)) ?? null;
+  return !raw?.sessionId || !raw.goal || !raw.goalEmbedding
+    ? null
+    : {
+        sessionId: raw.sessionId,
+        goal: raw.goal,
+        presetId: raw.presetId,
+        mode: raw.mode ?? "custom",
+        allowDomains: raw.allowDomains ?? [],
+        blockDomains: raw.blockDomains ?? [],
+        goalEmbedding: raw.goalEmbedding,
+        startTime: raw.startTime ?? Date.now(),
+        currentAlignmentScore: raw.currentAlignmentScore ?? 100,
+        driftState: raw.driftState ?? "ACTIVE_FOCUS",
+        recentScores: raw.recentScores ?? [],
+        recentEvents: raw.recentEvents ?? [],
+        notificationCooldownUntil: raw.notificationCooldownUntil ?? 0,
+      };
 }
-async function saveSession(session) {
+async function saveActiveSession(session) {
   await storageSet(ACTIVE_SESSION_KEY, session);
 }
-
-function computeAnalytics(session) {
-  if (!session)
-    return { avgScore: 0, totalEvents: 0, driftEvents: 0, elapsedMs: 0 };
+function buildAnalyticsSummary(session) {
+  if (!session) return { avgScore: 0, totalEvents: 0, driftEvents: 0, elapsedMs: 0 };
+  const totalEvents = session.recentEvents.length;
   return {
     avgScore: session.recentScores.length
       ? Math.round(
-          session.recentScores.reduce((sum, s) => sum + s, 0) /
-            session.recentScores.length,
+          session.recentScores.reduce((sum, score) => sum + score, 0) / session.recentScores.length,
         )
       : session.currentAlignmentScore,
-    totalEvents: session.recentEvents.length,
+    totalEvents: totalEvents,
     driftEvents: session.recentEvents.filter(
-      (e) => e.driftState === "DRIFT_CONFIRMED",
+      (event) => event.driftState === "DRIFT_CONFIRMED",
     ).length,
     elapsedMs: Date.now() - session.startTime,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Session lifecycle
-// ---------------------------------------------------------------------------
-async function startSession(goal) {
-  const existing = await loadSession();
-  if (existing) await logSessionEnd(existing);
-  await warmUpModel();
-  goal = "Represent this sentence for searching relevant passages: " + goal
-  const goalEmbedding = await embedText(goal);
-  console.log(goal);
+async function startSession(goalText, presetId, extraAllowDomains = [], extraBlockDomains = []) {
+  const existingSession = await getActiveSession();
+  existingSession && (await trackSessionEnd(existingSession));
+  const preset = getGoalPreset(presetId),
+    resolvedGoal = preset?.label ?? goalText,
+    allowDomains = deduplicateDomains([...(preset?.allowDomains ?? []), ...extraAllowDomains]),
+    blockDomains = deduplicateDomains([...(preset?.blockDomains ?? []), ...extraBlockDomains]).filter((domain) => !domainMatchesList(domain, allowDomains));
+  await warmUpEmbeddingPipeline();
+  const goalEmbedding = await getTextEmbedding(resolvedGoal);
   if (!goalEmbedding.length)
-    return { ok: false, error: "Could not generate an embedding for that goal." };
-  const session = {
+    return { ok: !1, error: "Could not generate an embedding for that goal." };
+  const newSession = {
     sessionId: crypto.randomUUID(),
-    goal,
-    goalEmbedding,
+    goal: resolvedGoal,
+    presetId: preset?.id,
+    mode: preset ? "preset" : "custom",
+    allowDomains: allowDomains,
+    blockDomains: blockDomains,
+    goalEmbedding: goalEmbedding,
     startTime: Date.now(),
     currentAlignmentScore: 100,
     driftState: "ACTIVE_FOCUS",
@@ -435,135 +303,141 @@ async function startSession(goal) {
     recentEvents: [],
     notificationCooldownUntil: 0,
   };
-  await saveSession(session);
-  logSessionStart(session);
-  evaluateActiveTab();
-  return { ok: true, session, analytics: computeAnalytics(session) };
+  return (await saveActiveSession(newSession), trackSessionStart(newSession), evaluateActiveTab(), { ok: !0, session: newSession, analytics: buildAnalyticsSummary(newSession) });
 }
-
+async function getActiveTabInfo() {
+  const [activeTab] = await chrome.tabs.query({ active: !0, currentWindow: !0 });
+  return !activeTab?.url || isInternalUrl(activeTab.url)
+    ? { ok: !0, activeTab: null }
+    : { ok: !0, activeTab: { url: activeTab.url, domain: extractDomain(activeTab.url) } };
+}
+async function addSiteRule(domain, rule) {
+  const session = await getActiveSession();
+  if (!session)
+    return { ok: !1, error: "Start a session before changing site rules." };
+  const normalizedDomain = deduplicateDomains([domain])[0];
+  if (!normalizedDomain) return { ok: !1, error: "Could not read a valid domain." };
+  const updatedSession =
+    rule === "allow"
+      ? {
+          ...session,
+          allowDomains: deduplicateDomains([...session.allowDomains, normalizedDomain]),
+          blockDomains: session.blockDomains.filter((entry) => !domainMatchesList(normalizedDomain, [entry])),
+        }
+      : {
+          ...session,
+          blockDomains: deduplicateDomains([...session.blockDomains, normalizedDomain]),
+          allowDomains: session.allowDomains.filter((entry) => !domainMatchesList(normalizedDomain, [entry])),
+        };
+  return (await saveActiveSession(updatedSession), evaluateActiveTab(), { ok: !0, session: updatedSession, analytics: buildAnalyticsSummary(updatedSession) });
+}
 async function stopSession() {
-  const session = await loadSession();
-  if (session) {
-    await logSessionEnd(session);
-    await storageRemove(ACTIVE_SESSION_KEY);
-  }
-  return { ok: true, session: null, analytics: computeAnalytics(null) };
+  const session = await getActiveSession();
+  return (
+    session && (await trackSessionEnd(session), await storageRemove(ACTIVE_SESSION_KEY)),
+    { ok: !0, session: null, analytics: buildAnalyticsSummary(null) }
+  );
 }
-
-// ---------------------------------------------------------------------------
-// Notifications
-// ---------------------------------------------------------------------------
-async function sendDriftNotification(session) {
-  await chrome.notifications.clear(DRIFT_NOTIFICATION_ID);
-  await chrome.notifications.create(DRIFT_NOTIFICATION_ID, {
-    type: "basic",
-    iconUrl: chrome.runtime.getURL("icons/icon128.svg"),
-    title: "Intent Lock",
-    message:
-      "This page looks misaligned with your goal. Intent Lock is blocking low-alignment browsing unless you choose to continue intentionally.",
-    buttons: [{ title: "Continue intentionally" }, { title: "5-minute detour" }],
-    priority: 1,
-  });
-  await saveSession({
-    ...session,
-    notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS,
-  });
+async function showDriftNotification(session) {
+  (await chrome.notifications.clear(DRIFT_NOTIFICATION_ID),
+    await chrome.notifications.create(DRIFT_NOTIFICATION_ID, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.svg"),
+      title: "Intent Lock",
+      message:
+        "This page looks misaligned with your goal. Intent Lock is blocking low-alignment browsing unless you choose to continue intentionally.",
+      buttons: [
+        { title: "Continue intentionally" },
+        { title: "5-minute detour" },
+      ],
+      priority: 1,
+    }),
+    await saveActiveSession({ ...session, notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS }));
 }
-
-// ---------------------------------------------------------------------------
-// Page blocking
-// ---------------------------------------------------------------------------
-async function sendBlockMessage(tabId, session, score) {
-  const message = {
-    type: "BLOCK_PAGE",
-    goal: session.goal,
-    score,
-    threshold: BLOCK_SCORE_THRESHOLD,
-  };
+async function injectBlockPage(tabId, session, score) {
   try {
-    await chrome.tabs.sendMessage(tabId, message);
+    await chrome.tabs.sendMessage(tabId, {
+      type: "BLOCK_PAGE",
+      goal: session.goal,
+      score: score,
+      threshold: BLOCK_SCORE_THRESHOLD,
+    });
   } catch {
-    // Content script may not be injected yet — inject and retry
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
+      (await chrome.scripting.executeScript({
+        target: { tabId: tabId },
         files: ["contentScript.js"],
-      });
-      await chrome.tabs.sendMessage(tabId, message);
-    } catch { /* tab may have closed */ }
+      }),
+        await chrome.tabs.sendMessage(tabId, {
+          type: "BLOCK_PAGE",
+          goal: session.goal,
+          score: score,
+          threshold: BLOCK_SCORE_THRESHOLD,
+        }));
+    } catch {}
   }
 }
-
-// ---------------------------------------------------------------------------
-// Page evaluation
-// ---------------------------------------------------------------------------
-async function evaluatePage(pageSummary, tabId) {
-  const session = await loadSession();
-  if (!session || isBrowserInternalUrl(pageSummary.url)) return;
-
-  try {
-    let score = 0;
-    const isBlocked = isHardBlocklisted(pageSummary.url);
-
-    if (isBlocked) {
-      score = 0;
-    } else {
-      const pageEmbedding = await embedText(pageSummary.text);
-      if (!pageEmbedding.length) return;
-      score = similarityToAlignmentScore(session.goalEmbedding, pageEmbedding);
-    }
-
-    const pageEvent = {
-      id: crypto.randomUUID(),
-      sessionId: session.sessionId,
-      timestamp: Date.now(),
-      url: pageSummary.url,
-      domain: extractDomain(pageSummary.url),
-      score,
-      driftState: session.driftState,
-    };
-
-    let updatedSession = appendPageEvent(session, pageEvent);
-    const driftResult = evaluateDriftState(updatedSession);
-
-    pageEvent.driftState = driftResult.driftState;
-    updatedSession = {
-      ...updatedSession,
-      driftState: driftResult.driftState,
-      recentEvents: [...updatedSession.recentEvents.slice(0, -1), pageEvent],
-    };
-
-    await saveSession(updatedSession);
-    logPageEvent(pageEvent);
-    flushAnalyticsQueue();
-
-    if (driftResult.shouldNotify) {
-      logDriftEvent(
-        session.sessionId,
-        isBlocked
-          ? `Visited hard-blocklisted domain: ${pageEvent.domain}`
-          : driftResult.triggerReason ?? "Sustained low-alignment browsing",
+async function processPageSummary(pageSummary, tabId) {
+  const session = await getActiveSession();
+  if (!(!session || isInternalUrl(pageSummary.url)))
+    try {
+      const domain = extractDomain(pageSummary.url),
+        isAllowed = domainMatchesList(domain, session.allowDomains),
+        isBlocked = !isAllowed && domainMatchesList(domain, session.blockDomains),
+        decision = isAllowed ? "allowed" : isBlocked ? "blocked" : "semantic";
+      let score = 0;
+      if (isAllowed) score = 100;
+      else if (isBlocked) score = 0;
+      else {
+        const pageEmbedding = await getTextEmbedding(pageSummary.text);
+        if (!pageEmbedding.length) return;
+        score = computeAlignmentScore(session.goalEmbedding, pageEmbedding);
+      }
+      const pageEvent = {
+        id: crypto.randomUUID(),
+        sessionId: session.sessionId,
+        timestamp: Date.now(),
+        url: pageSummary.url,
+        domain: domain,
+        score: score,
+        driftState: session.driftState,
+        decision: decision,
+      };
+      let updatedSession = appendSessionEvent(session, pageEvent);
+      const driftResult = evaluateDriftState(updatedSession);
+      ((pageEvent.driftState = driftResult.driftState),
+        (updatedSession = {
+          ...updatedSession,
+          driftState: driftResult.driftState,
+          recentEvents: [...updatedSession.recentEvents.slice(0, -1), pageEvent],
+        }),
+        await saveActiveSession(updatedSession),
+        trackPageEvent(pageEvent),
+        flushAnalyticsQueue(),
+        driftResult.shouldNotify &&
+          (trackDriftEvent(
+            session.sessionId,
+            isBlocked
+              ? `Visited blocked domain for ${session.goal}: ${pageEvent.domain}`
+              : (driftResult.triggerReason ?? "Sustained low-alignment browsing"),
+          ),
+          await showDriftNotification(updatedSession)),
+        tabId && score < BLOCK_SCORE_THRESHOLD && (await injectBlockPage(tabId, updatedSession, score)));
+    } catch (err) {
+      console.warn(
+        "Intent Lock: skipped page summary after processing error",
+        err,
       );
-      await sendDriftNotification(updatedSession);
     }
-
-    if (tabId && score < BLOCK_SCORE_THRESHOLD) {
-      await sendBlockMessage(tabId, updatedSession, score);
-    }
-  } catch (err) {
-    console.warn("Intent Lock: skipped page summary after processing error", err);
-  }
 }
-
-async function extractPageSummary(tabId) {
+async function extractPageContent(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE" });
     if (response?.ok && response.summary) return response.summary;
   } catch {
-    // Inject content script and retry
     try {
       await chrome.scripting.executeScript({
-        target: { tabId },
+        target: { tabId: tabId },
         files: ["contentScript.js"],
       });
       const response = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE" });
@@ -574,78 +448,67 @@ async function extractPageSummary(tabId) {
   }
   return null;
 }
-
 async function evaluateActiveTab() {
-  if (!(await loadSession())) return;
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!activeTab?.id || isBrowserInternalUrl(activeTab.url)) return;
-  const summary = await extractPageSummary(activeTab.id);
-  if (summary) await evaluatePage(summary, activeTab.id);
+  if (!(await getActiveSession())) return;
+  const [activeTab] = await chrome.tabs.query({ active: !0, currentWindow: !0 });
+  if (!activeTab?.id || isInternalUrl(activeTab.url)) return;
+  const pageSummary = await extractPageContent(activeTab.id);
+  pageSummary && (await processPageSummary(pageSummary, activeTab.id));
 }
-
-// ---------------------------------------------------------------------------
-// Message handler
-// ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  (async () => {
-    if (message.type === "START_SESSION") return startSession(message.goal);
-    if (message.type === "STOP_SESSION")  return stopSession();
-    if (message.type === "GET_STATE") {
-      const session = await loadSession();
-      return { ok: true, session, analytics: computeAnalytics(session) };
-    }
-    if (message.type === "PAGE_SUMMARY") {
-      await evaluatePage(message.summary);
-      const session = await loadSession();
-      return { ok: true, session, analytics: computeAnalytics(session) };
-    }
-    return { ok: false, error: "Unknown message type." };
-  })()
-    .then(sendResponse)
-    .catch((err) =>
-      sendResponse({
-        ok: false,
-        error: err instanceof Error ? err.message : "Unexpected error",
-      }),
-    );
-  return true; // keep message channel open for async response
+chrome.runtime.onMessage.addListener(
+  (message, sender, sendResponse) => (
+    (async () => {
+      if (message.type === "START_SESSION")
+        return startSession(message.goal, message.presetId, message.allowDomains, message.blockDomains);
+      if (message.type === "STOP_SESSION") return stopSession();
+      if (message.type === "GET_ACTIVE_TAB") return getActiveTabInfo();
+      if (message.type === "ADD_SITE_RULE") return addSiteRule(message.domain, message.rule);
+      if (message.type === "GET_STATE") {
+        const session = await getActiveSession();
+        return { ok: !0, session: session, analytics: buildAnalyticsSummary(session) };
+      }
+      if (message.type === "PAGE_SUMMARY") {
+        await processPageSummary(message.summary);
+        const session = await getActiveSession();
+        return { ok: !0, session: session, analytics: buildAnalyticsSummary(session) };
+      }
+      return { ok: !1, error: "Unknown message type." };
+    })()
+      .then(sendResponse)
+      .catch((err) =>
+        sendResponse({
+          ok: !1,
+          error: err instanceof Error ? err.message : "Unexpected error",
+        }),
+      ),
+    !0
+  ),
+);
+chrome.tabs.onActivated.addListener(() => {
+  evaluateActiveTab();
 });
-
-// ---------------------------------------------------------------------------
-// Tab event listeners
-// ---------------------------------------------------------------------------
-chrome.tabs.onActivated.addListener(() => evaluateActiveTab());
-
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === "complete" && tab.active) evaluateActiveTab();
+  changeInfo.status === "complete" && tab.active && evaluateActiveTab();
 });
-
-// ---------------------------------------------------------------------------
-// Notification button handlers
-// ---------------------------------------------------------------------------
-chrome.notifications.onButtonClicked.addListener((notifId, buttonIndex) => {
-  if (notifId !== DRIFT_NOTIFICATION_ID) return;
-  (async () => {
-    const session = await loadSession();
-    if (!session) return;
-    if (buttonIndex === 0) {
-      // "Continue intentionally" — reset drift, apply cooldown
-      await saveSession({
-        ...session,
-        driftState: "ACTIVE_FOCUS",
-        notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS,
-      });
-    } else if (buttonIndex === 1) {
-      // "5-minute detour" — extend cooldown only
-      await saveSession({
-        ...session,
-        notificationCooldownUntil: Date.now() + 300 * 1000,
-      });
-    }
-    await chrome.notifications.clear(DRIFT_NOTIFICATION_ID);
-  })();
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  notificationId === DRIFT_NOTIFICATION_ID &&
+    (async () => {
+      const session = await getActiveSession();
+      session &&
+        (buttonIndex === 0 &&
+          (await saveActiveSession({
+            ...session,
+            driftState: "ACTIVE_FOCUS",
+            notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS,
+          })),
+        buttonIndex === 1 &&
+          (await saveActiveSession({
+            ...session,
+            notificationCooldownUntil: Date.now() + 300 * 1e3,
+          })),
+        await chrome.notifications.clear(DRIFT_NOTIFICATION_ID));
+    })();
 });
-
-chrome.notifications.onClicked.addListener((notifId) => {
-  if (notifId === DRIFT_NOTIFICATION_ID) chrome.action.openPopup();
+chrome.notifications.onClicked.addListener((notificationId) => {
+  notificationId === DRIFT_NOTIFICATION_ID && chrome.action.openPopup();
 });

@@ -1,323 +1,411 @@
 import * as _transformersModule from "./chunks/transformers.web-C0dh_jD5.js";
-const q = "modulepreload",
-  j = function (t) {
-    return "/" + t;
-  },
-  D = {},
-  W = function (e, n, r) {
-    let a = Promise.resolve();
-    if (n && n.length > 0) {
-      let g = function (l) {
-        return Promise.all(
-          l.map((u) =>
-            Promise.resolve(u).then(
-              (f) => ({ status: "fulfilled", value: f }),
-              (f) => ({ status: "rejected", reason: f }),
-            ),
+
+// ---------------------------------------------------------------------------
+// Vite module-preload polyfill (do not modify)
+// ---------------------------------------------------------------------------
+const MODULE_PRELOAD_REL = "modulepreload";
+const resolvePath = function (t) { return "/" + t; };
+const preloadedModules = {};
+const vitePreload = function (loadFn, deps, baseUrl) {
+  let readyPromise = Promise.resolve();
+  if (deps && deps.length > 0) {
+    let allSettled = function (promises) {
+      return Promise.all(
+        promises.map((p) =>
+          Promise.resolve(p).then(
+            (v) => ({ status: "fulfilled", value: v }),
+            (e) => ({ status: "rejected", reason: e }),
           ),
-        );
-      };
-      var i = g;
-      document.getElementsByTagName("link");
-      const c = document.querySelector("meta[property=csp-nonce]"),
-        s = c?.nonce || c?.getAttribute("nonce");
-      a = g(
-        n.map((l) => {
-          if (((l = j(l)), l in D)) return;
-          D[l] = !0;
-          const u = l.endsWith(".css"),
-            f = u ? '[rel="stylesheet"]' : "";
-          if (document.querySelector(`link[href="${l}"]${f}`)) return;
-          const d = document.createElement("link");
-          if (
-            ((d.rel = u ? "stylesheet" : q),
-            u || (d.as = "script"),
-            (d.crossOrigin = ""),
-            (d.href = l),
-            s && d.setAttribute("nonce", s),
-            document.head.appendChild(d),
-            u)
-          )
-            return new Promise(($, B) => {
-              (d.addEventListener("load", $),
-                d.addEventListener("error", () =>
-                  B(new Error(`Unable to preload CSS for ${l}`)),
-                ));
-            });
-        }),
+        ),
       );
-    }
-    function o(c) {
-      const s = new Event("vite:preloadError", { cancelable: !0 });
-      if (((s.payload = c), window.dispatchEvent(s), !s.defaultPrevented))
-        throw c;
-    }
-    return a.then((c) => {
-      for (const s of c || []) s.status === "rejected" && o(s.reason);
-      return e().catch(o);
-    });
-  };
-async function S(t) {
-  return (await chrome.storage.local.get(t))[t];
+    };
+    var settled = allSettled;
+    document.getElementsByTagName("link");
+    const nonceMeta = document.querySelector("meta[property=csp-nonce]");
+    const nonce = nonceMeta?.nonce || nonceMeta?.getAttribute("nonce");
+    readyPromise = allSettled(
+      deps.map((dep) => {
+        if (((dep = resolvePath(dep)), dep in preloadedModules)) return;
+        preloadedModules[dep] = true;
+        const isCSS = dep.endsWith(".css");
+        const cssSelector = isCSS ? '[rel="stylesheet"]' : "";
+        if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) return;
+        const link = document.createElement("link");
+        if (
+          ((link.rel = isCSS ? "stylesheet" : MODULE_PRELOAD_REL),
+          isCSS || (link.as = "script"),
+          (link.crossOrigin = ""),
+          (link.href = dep),
+          nonce && link.setAttribute("nonce", nonce),
+          document.head.appendChild(link),
+          isCSS)
+        )
+          return new Promise((resolve, reject) => {
+            link.addEventListener("load", resolve);
+            link.addEventListener("error", () =>
+              reject(new Error(`Unable to preload CSS for ${dep}`)),
+            );
+          });
+      }),
+    );
+  }
+  function throwPreloadError(err) {
+    const event = new Event("vite:preloadError", { cancelable: true });
+    if (((event.payload = err), window.dispatchEvent(event), !event.defaultPrevented))
+      throw err;
+  }
+  return readyPromise.then((results) => {
+    for (const result of results || [])
+      result.status === "rejected" && throwPreloadError(result.reason);
+    return loadFn().catch(throwPreloadError);
+  });
+};
+
+// ---------------------------------------------------------------------------
+// Chrome storage helpers
+// ---------------------------------------------------------------------------
+async function storageGet(key) {
+  return (await chrome.storage.local.get(key))[key];
 }
-async function v(t, e) {
-  await chrome.storage.local.set({ [t]: e });
+async function storageSet(key, value) {
+  await chrome.storage.local.set({ [key]: value });
 }
-async function z(t) {
-  await chrome.storage.local.remove(t);
+async function storageRemove(key) {
+  await chrome.storage.local.remove(key);
 }
-const T = "intent-lock:embedding-cache",
-  G = 250;
-async function K(t) {
-  return ((await S(T)) ?? {})[t]?.embedding ?? null;
+
+// ---------------------------------------------------------------------------
+// Embedding cache
+// ---------------------------------------------------------------------------
+const EMBEDDING_CACHE_KEY = "intent-lock:embedding-cache";
+const EMBEDDING_CACHE_MAX_SIZE = 250;
+
+async function getCachedEmbedding(textHash) {
+  return ((await storageGet(EMBEDDING_CACHE_KEY)) ?? {})[textHash]?.embedding ?? null;
 }
-async function V(t, e) {
-  const n = (await S(T)) ?? {};
-  n[t] = { textHash: t, embedding: e, timestamp: Date.now() };
-  const r = Object.values(n).sort((o, i) => i.timestamp - o.timestamp),
-    a = Object.fromEntries(r.slice(0, G).map((o) => [o.textHash, o]));
-  await v(T, a);
+
+async function setCachedEmbedding(textHash, embedding) {
+  const cache = (await storageGet(EMBEDDING_CACHE_KEY)) ?? {};
+  cache[textHash] = { textHash, embedding, timestamp: Date.now() };
+  const trimmed = Object.fromEntries(
+    Object.values(cache)
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, EMBEDDING_CACHE_MAX_SIZE)
+      .map((entry) => [entry.textHash, entry]),
+  );
+  await storageSet(EMBEDDING_CACHE_KEY, trimmed);
 }
-async function Y(t) {
-  const e = new TextEncoder().encode(t),
-    n = await crypto.subtle.digest("SHA-256", e);
-  return [...new Uint8Array(n)]
-    .map((r) => r.toString(16).padStart(2, "0"))
+
+async function hashText(text) {
+  const encoded = new TextEncoder().encode(text);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  return [...new Uint8Array(hashBuffer)]
+    .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
-let O = null;
-function X() {
-  const t = globalThis;
-  t.window ??= globalThis;
+
+// ---------------------------------------------------------------------------
+// ML model (Xenova/all-MiniLM-L6-v2 via Transformers.js)
+// ---------------------------------------------------------------------------
+let pipelinePromise = null;
+
+function polyfillWindowForServiceWorker() {
+  const global = globalThis;
+  global.window ??= globalThis;
 }
-async function M() {
-  return (
-    O ||
-      (X(),
-      (O = Promise.resolve(_transformersModule).then(
-        async ({ env: t, pipeline: e }) => (
-          (t.allowLocalModels = !1),
-          (t.allowRemoteModels = !0),
-          await e("feature-extraction", "Xenova/all-MiniLM-L6-v2")
-        ),
-      ))),
-    O
-  );
+
+async function getEmbeddingPipeline() {
+  if (!pipelinePromise) {
+    polyfillWindowForServiceWorker();
+    pipelinePromise = Promise.resolve(_transformersModule).then(
+      async ({ env, pipeline }) => {
+        env.allowLocalModels = false;
+        env.allowRemoteModels = true;
+        return await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+      },
+    );
+  }
+  return pipelinePromise;
 }
-function Q(t) {
-  return Array.isArray(t) ? t.map(Number) : Array.from(t.data, Number);
+
+function tensorToNumberArray(tensor) {
+  return Array.isArray(tensor)
+    ? tensor.map(Number)
+    : Array.from(tensor.data, Number);
 }
-async function U(t) {
-  const e = t.trim().replace(/\s+/g, " ");
-  if (!e) return [];
-  const n = await Y(e),
-    r = await K(n);
-  if (r) return r;
-  const o = await (await M())(e, { pooling: "mean", normalize: !0 }),
-    i = Q(o);
-  return (await V(n, i), i);
+
+async function embedText(text) {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) return [];
+  const hash = await hashText(normalized);
+  const cached = await getCachedEmbedding(hash);
+  if (cached) return cached;
+  const result = await (await getEmbeddingPipeline())(normalized, {
+    pooling: "mean",
+    normalize: true,
+  });
+  const vector = tensorToNumberArray(result);
+  await setCachedEmbedding(hash, vector);
+  return vector;
 }
-async function J() {
-  await M();
+
+async function warmUpModel() {
+  await getEmbeddingPipeline();
 }
-function Z(t, e) {
-  if (t.length === 0 || e.length === 0 || t.length !== e.length) return 0;
-  let n = 0,
-    r = 0,
-    a = 0;
-  for (let o = 0; o < t.length; o += 1)
-    ((n += t[o] * e[o]), (r += t[o] * t[o]), (a += e[o] * e[o]));
-  return r === 0 || a === 0 ? 0 : n / (Math.sqrt(r) * Math.sqrt(a));
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+function cosineSimilarity(vecA, vecB) {
+  if (vecA.length === 0 || vecB.length === 0 || vecA.length !== vecB.length)
+    return 0;
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < vecA.length; i += 1) {
+    dot  += vecA[i] * vecB[i];
+    magA += vecA[i] * vecA[i];
+    magB += vecB[i] * vecB[i];
+  }
+  return magA === 0 || magB === 0 ? 0 : dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
-function tt(t, e) {
-  const n = Z(t, e),
-    r = 0.18,
-    o = Math.min(1, Math.max(0, (n - r) / (0.62 - r))),
-    i =
-      o < 0.5
-        ? 0.5 * Math.pow(o / 0.5, 1.35)
-        : 1 - 0.5 * Math.pow((1 - o) / 0.5, 1.35);
-  return Math.round(Math.min(100, Math.max(0, i * 100)));
+
+function similarityToAlignmentScore(goalVec, pageVec) {
+  const raw = cosineSimilarity(goalVec, pageVec);
+  const LOW_CLIP  = 0.18;
+  const HIGH_CLIP = 0.62;
+  const normalized = Math.min(1, Math.max(0, (raw - LOW_CLIP) / (HIGH_CLIP - LOW_CLIP)));
+  // S-curve: compress extremes, expand the middle
+  const curved = normalized < 0.5
+    ? 0.5 * Math.pow(normalized / 0.5, 1.35)
+    : 1 - 0.5 * Math.pow((1 - normalized) / 0.5, 1.35);
+  return Math.round(Math.min(100, Math.max(0, curved * 100)));
 }
-const p = "intent-lock:analytics-queue",
-  L = void 0,
-  b = void 0;
-function R() {
-  return !!L;
+
+// ---------------------------------------------------------------------------
+// Analytics (Supabase — disabled until credentials are provided)
+// ---------------------------------------------------------------------------
+const ANALYTICS_QUEUE_KEY = "intent-lock:analytics-queue";
+const SUPABASE_URL = void 0;  // set to your Supabase project URL to enable
+const SUPABASE_ANON_KEY = void 0;
+
+function isAnalyticsEnabled() {
+  return !!SUPABASE_URL;
 }
-async function k(t) {
-  const e = (await S(p)) ?? [];
-  await v(p, [...e, t].slice(-500));
+
+async function enqueueAnalyticsEvent(event) {
+  const queue = (await storageGet(ANALYTICS_QUEUE_KEY)) ?? [];
+  await storageSet(ANALYTICS_QUEUE_KEY, [...queue, event].slice(-500));
 }
-async function N(t, e) {
-  return R()
-    ? (
-        await fetch(`${L}/rest/v1/${t}`, {
-          method: "POST",
-          headers: {
-            apikey: b,
-            Authorization: `Bearer ${b}`,
-            "Content-Type": "application/json",
-            Prefer: "return=minimal",
-          },
-          body: JSON.stringify(e),
-        })
-      ).ok
-    : !1;
+
+async function postToSupabase(table, payload) {
+  if (!isAnalyticsEnabled()) return false;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(payload),
+  });
+  return res.ok;
 }
-async function _(t, e, n) {
+
+async function logAnalyticsEvent(eventType, table, payload) {
   try {
-    (await N(e, n)) ||
-      (await k({ type: t, payload: n, createdAt: Date.now() }));
+    (await postToSupabase(table, payload)) ||
+      (await enqueueAnalyticsEvent({ type: eventType, payload, createdAt: Date.now() }));
   } catch {
-    await k({ type: t, payload: n, createdAt: Date.now() });
+    await enqueueAnalyticsEvent({ type: eventType, payload, createdAt: Date.now() });
   }
 }
-async function et(t) {
-  await _("session", "sessions", {
-    id: t.sessionId,
-    goal: t.goal,
-    start_time: new Date(t.startTime).toISOString(),
-    avg_score: t.currentAlignmentScore,
+
+async function logSessionStart(session) {
+  await logAnalyticsEvent("session", "sessions", {
+    id: session.sessionId,
+    goal: session.goal,
+    start_time: new Date(session.startTime).toISOString(),
+    avg_score: session.currentAlignmentScore,
   });
 }
-async function P(t) {
-  const e = t.recentScores.length
-    ? t.recentScores.reduce((n, r) => n + r, 0) / t.recentScores.length
-    : t.currentAlignmentScore;
-  await _("session", "sessions", {
-    id: t.sessionId,
-    goal: t.goal,
-    start_time: new Date(t.startTime).toISOString(),
+
+async function logSessionEnd(session) {
+  const avg = session.recentScores.length
+    ? session.recentScores.reduce((sum, s) => sum + s, 0) / session.recentScores.length
+    : session.currentAlignmentScore;
+  await logAnalyticsEvent("session", "sessions", {
+    id: session.sessionId,
+    goal: session.goal,
+    start_time: new Date(session.startTime).toISOString(),
     end_time: new Date().toISOString(),
-    avg_score: e,
+    avg_score: avg,
   });
 }
-async function nt(t) {
-  await _("event", "events", {
-    id: t.id,
-    session_id: t.sessionId,
-    timestamp: new Date(t.timestamp).toISOString(),
-    url: t.url,
-    domain: t.domain,
-    score: t.score,
-    drift_state: t.driftState,
+
+async function logPageEvent(event) {
+  await logAnalyticsEvent("event", "events", {
+    id: event.id,
+    session_id: event.sessionId,
+    timestamp: new Date(event.timestamp).toISOString(),
+    url: event.url,
+    domain: event.domain,
+    score: event.score,
+    drift_state: event.driftState,
   });
 }
-async function rt(t, e) {
-  await _("drift_event", "drift_events", {
+
+async function logDriftEvent(sessionId, triggerReason) {
+  await logAnalyticsEvent("drift_event", "drift_events", {
     id: crypto.randomUUID(),
-    session_id: t,
+    session_id: sessionId,
     timestamp: new Date().toISOString(),
-    trigger_reason: e,
+    trigger_reason: triggerReason,
   });
 }
-async function ot() {
-  const t = (await S(p)) ?? [];
-  if (!t.length || !R()) return;
-  const e = [];
-  for (const n of t) {
-    const r = n.type === "drift_event" ? "drift_events" : `${n.type}s`;
+
+async function flushAnalyticsQueue() {
+  const queue = (await storageGet(ANALYTICS_QUEUE_KEY)) ?? [];
+  if (!queue.length || !isAnalyticsEnabled()) return;
+  const failed = [];
+  for (const item of queue) {
+    const table = item.type === "drift_event" ? "drift_events" : `${item.type}s`;
     try {
-      (await N(r, n.payload)) || e.push(n);
+      (await postToSupabase(table, item.payload)) || failed.push(item);
     } catch {
-      e.push(n);
+      failed.push(item);
     }
   }
-  await v(p, e);
+  await storageSet(ANALYTICS_QUEUE_KEY, failed);
 }
-function at(t) {
+
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+function extractDomain(url) {
   try {
-    return new URL(t).hostname.replace(/^www\./, "");
+    return new URL(url).hostname.replace(/^www\./, "");
   } catch {
     return "unknown";
   }
 }
-function x(t) {
-  return t ? /^(chrome|edge|brave|about|file|view-source):/i.test(t) : !0;
+
+function isBrowserInternalUrl(url) {
+  return url ? /^(chrome|edge|brave|about|file|view-source):/i.test(url) : true;
 }
-const y = 55,
-  it = 72,
-  ct = 2,
-  st = 45 * 1e3;
-function lt(t, e) {
-  const n = [];
-  for (const r of t) {
-    if (!e(r)) break;
-    n.push(r);
+
+// ---------------------------------------------------------------------------
+// Drift detection thresholds
+// ---------------------------------------------------------------------------
+const DRIFT_SCORE_THRESHOLD       = 55;   // below this = low alignment
+const FOCUS_SCORE_THRESHOLD       = 72;   // above this = confirmed focus
+const ROLLING_LOW_PAGES_REQUIRED  = 2;    // min consecutive low-score pages
+const ROLLING_LOW_DURATION_MS     = 45 * 1000; // must sustain for 45s
+
+function takeWhileFromEnd(arr, predicate) {
+  const result = [];
+  for (const item of arr) {
+    if (!predicate(item)) break;
+    result.push(item);
   }
-  return n;
+  return result;
 }
-function ut(t, e) {
+
+function appendPageEvent(session, pageEvent) {
   return {
-    ...t,
-    currentAlignmentScore: e.score,
-    recentScores: [...t.recentScores, e.score].slice(-20),
-    recentEvents: [...t.recentEvents, e].slice(-20),
+    ...session,
+    currentAlignmentScore: pageEvent.score,
+    recentScores: [...session.recentScores, pageEvent.score].slice(-20),
+    recentEvents: [...session.recentEvents, pageEvent].slice(-20),
   };
 }
-function dt(t, e = Date.now()) {
-  const n = t.recentScores,
-    r = t.recentEvents,
-    a = n.length ? n.reduce((u, f) => u + f, 0) / n.length : 100,
-    o = lt([...r].reverse(), (u) => u.score < y),
-    i = o.at(-1),
-    c = i ? e - i.timestamp : 0,
-    s = n.at(-1) ?? 100,
-    g = s < y,
-    l = a < y && o.length >= ct && c > st;
-  return g || l
-    ? {
-        driftState: "DRIFT_CONFIRMED",
-        shouldNotify:
-          e >= t.notificationCooldownUntil &&
-          t.driftState !== "DRIFT_CONFIRMED",
-        triggerReason: g
-          ? `Immediate hard drift: latest score ${s}`
-          : `Rolling average ${a.toFixed(1)} with ${o.length} low-score pages for ${Math.round(c / 1e3)} seconds`,
-      }
-    : a < y || o.length >= 2
-      ? { driftState: "POSSIBLE_DRIFT", shouldNotify: !1 }
-      : a >= it
-        ? { driftState: "ACTIVE_FOCUS", shouldNotify: !1 }
-        : { driftState: t.driftState, shouldNotify: !1 };
+
+function evaluateDriftState(session, now = Date.now()) {
+  const scores = session.recentScores;
+  const events = session.recentEvents;
+  const avgScore = scores.length
+    ? scores.reduce((sum, s) => sum + s, 0) / scores.length
+    : 100;
+
+  // consecutive low-score pages (from most recent backwards)
+  const recentLowPages = takeWhileFromEnd(
+    [...events].reverse(),
+    (e) => e.score < DRIFT_SCORE_THRESHOLD,
+  );
+  const oldestLowPage = recentLowPages.at(-1);
+  const lowStreakDurationMs = oldestLowPage ? now - oldestLowPage.timestamp : 0;
+
+  const latestScore = scores.at(-1) ?? 100;
+  const isHardDrift    = latestScore < DRIFT_SCORE_THRESHOLD;
+  const isRollingDrift =
+    avgScore < DRIFT_SCORE_THRESHOLD &&
+    recentLowPages.length >= ROLLING_LOW_PAGES_REQUIRED &&
+    lowStreakDurationMs > ROLLING_LOW_DURATION_MS;
+
+  if (isHardDrift || isRollingDrift) {
+    return {
+      driftState: "DRIFT_CONFIRMED",
+      shouldNotify:
+        now >= session.notificationCooldownUntil &&
+        session.driftState !== "DRIFT_CONFIRMED",
+      triggerReason: isHardDrift
+        ? `Immediate hard drift: latest score ${latestScore}`
+        : `Rolling average ${avgScore.toFixed(1)} with ${recentLowPages.length} low-score pages for ${Math.round(lowStreakDurationMs / 1000)} seconds`,
+    };
+  }
+  if (avgScore < DRIFT_SCORE_THRESHOLD || recentLowPages.length >= 2)
+    return { driftState: "POSSIBLE_DRIFT", shouldNotify: false };
+  if (avgScore >= FOCUS_SCORE_THRESHOLD)
+    return { driftState: "ACTIVE_FOCUS", shouldNotify: false };
+  return { driftState: session.driftState, shouldNotify: false };
 }
-const C = "intent-lock:active-session",
-  w = "intent-lock-drift",
-  F = 120 * 1e3,
-  A = 58;
-async function m() {
-  return (await S(C)) ?? null;
+
+// ---------------------------------------------------------------------------
+// Session storage
+// ---------------------------------------------------------------------------
+const ACTIVE_SESSION_KEY = "intent-lock:active-session";
+const DRIFT_NOTIFICATION_ID = "intent-lock-drift";
+const NOTIFICATION_COOLDOWN_MS = 120 * 1000;
+const BLOCK_SCORE_THRESHOLD = 58;
+
+async function loadSession() {
+  return (await storageGet(ACTIVE_SESSION_KEY)) ?? null;
 }
-async function h(t) {
-  await v(C, t);
+async function saveSession(session) {
+  await storageSet(ACTIVE_SESSION_KEY, session);
 }
-function E(t) {
-  if (!t) return { avgScore: 0, totalEvents: 0, driftEvents: 0, elapsedMs: 0 };
-  const e = t.recentEvents.length;
+
+function computeAnalytics(session) {
+  if (!session)
+    return { avgScore: 0, totalEvents: 0, driftEvents: 0, elapsedMs: 0 };
   return {
-    avgScore: t.recentScores.length
+    avgScore: session.recentScores.length
       ? Math.round(
-          t.recentScores.reduce((r, a) => r + a, 0) / t.recentScores.length,
+          session.recentScores.reduce((sum, s) => sum + s, 0) /
+            session.recentScores.length,
         )
-      : t.currentAlignmentScore,
-    totalEvents: e,
-    driftEvents: t.recentEvents.filter(
-      (r) => r.driftState === "DRIFT_CONFIRMED",
+      : session.currentAlignmentScore,
+    totalEvents: session.recentEvents.length,
+    driftEvents: session.recentEvents.filter(
+      (e) => e.driftState === "DRIFT_CONFIRMED",
     ).length,
-    elapsedMs: Date.now() - t.startTime,
+    elapsedMs: Date.now() - session.startTime,
   };
 }
-async function ft(t) {
-  const e = await m();
-  (e && (await P(e)), await J());
-  const n = await U(t);
-  if (!n.length)
-    return { ok: !1, error: "Could not generate an embedding for that goal." };
-  const r = {
+
+// ---------------------------------------------------------------------------
+// Session lifecycle
+// ---------------------------------------------------------------------------
+async function startSession(goal) {
+  const existing = await loadSession();
+  if (existing) await logSessionEnd(existing);
+  await warmUpModel();
+  const goalEmbedding = await embedText(goal);
+  if (!goalEmbedding.length)
+    return { ok: false, error: "Could not generate an embedding for that goal." };
+  const session = {
     sessionId: crypto.randomUUID(),
-    goal: t,
-    goalEmbedding: n,
+    goal,
+    goalEmbedding,
     startTime: Date.now(),
     currentAlignmentScore: 100,
     driftState: "ACTIVE_FOCUS",
@@ -325,171 +413,207 @@ async function ft(t) {
     recentEvents: [],
     notificationCooldownUntil: 0,
   };
-  return (await h(r), et(r), I(), { ok: !0, session: r, analytics: E(r) });
+  await saveSession(session);
+  logSessionStart(session);
+  evaluateActiveTab();
+  return { ok: true, session, analytics: computeAnalytics(session) };
 }
-async function mt() {
-  const t = await m();
-  return (
-    t && (await P(t), await z(C)),
-    { ok: !0, session: null, analytics: E(null) }
-  );
-}
-async function gt(t) {
-  (await chrome.notifications.clear(w),
-    await chrome.notifications.create(w, {
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.svg"),
-      title: "Intent Lock",
-      message:
-        "This page looks misaligned with your goal. Intent Lock is blocking low-alignment browsing unless you choose to continue intentionally.",
-      buttons: [
-        { title: "Continue intentionally" },
-        { title: "5-minute detour" },
-      ],
-      priority: 1,
-    }),
-    await h({ ...t, notificationCooldownUntil: Date.now() + F }));
-}
-async function wt(t, e, n) {
-  try {
-    await chrome.tabs.sendMessage(t, {
-      type: "BLOCK_PAGE",
-      goal: e.goal,
-      score: n,
-      threshold: A,
-    });
-  } catch {
-    try {
-      (await chrome.scripting.executeScript({
-        target: { tabId: t },
-        files: ["contentScript.js"],
-      }),
-        await chrome.tabs.sendMessage(t, {
-          type: "BLOCK_PAGE",
-          goal: e.goal,
-          score: n,
-          threshold: A,
-        }));
-    } catch {}
+
+async function stopSession() {
+  const session = await loadSession();
+  if (session) {
+    await logSessionEnd(session);
+    await storageRemove(ACTIVE_SESSION_KEY);
   }
+  return { ok: true, session: null, analytics: computeAnalytics(null) };
 }
-async function H(t, e) {
-  const n = await m();
-  if (!(!n || x(t.url)))
-    try {
-      const r = await U(t.text);
-      if (!r.length) return;
-      const a = tt(n.goalEmbedding, r),
-        o = {
-          id: crypto.randomUUID(),
-          sessionId: n.sessionId,
-          timestamp: Date.now(),
-          url: t.url,
-          domain: at(t.url),
-          score: a,
-          driftState: n.driftState,
-        };
-      let i = ut(n, o);
-      const c = dt(i);
-      ((o.driftState = c.driftState),
-        (i = {
-          ...i,
-          driftState: c.driftState,
-          recentEvents: [...i.recentEvents.slice(0, -1), o],
-        }),
-        await h(i),
-        nt(o),
-        ot(),
-        c.shouldNotify &&
-          (rt(
-            n.sessionId,
-            c.triggerReason ?? "Sustained low-alignment browsing",
-          ),
-          await gt(i)),
-        e && a < A && (await wt(e, i, a)));
-    } catch (r) {
-      console.warn(
-        "Intent Lock: skipped page summary after processing error",
-        r,
-      );
-    }
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+async function sendDriftNotification(session) {
+  await chrome.notifications.clear(DRIFT_NOTIFICATION_ID);
+  await chrome.notifications.create(DRIFT_NOTIFICATION_ID, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL("icons/icon128.svg"),
+    title: "Intent Lock",
+    message:
+      "This page looks misaligned with your goal. Intent Lock is blocking low-alignment browsing unless you choose to continue intentionally.",
+    buttons: [{ title: "Continue intentionally" }, { title: "5-minute detour" }],
+    priority: 1,
+  });
+  await saveSession({
+    ...session,
+    notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS,
+  });
 }
-async function ht(t) {
+
+// ---------------------------------------------------------------------------
+// Page blocking
+// ---------------------------------------------------------------------------
+async function sendBlockMessage(tabId, session, score) {
+  const message = {
+    type: "BLOCK_PAGE",
+    goal: session.goal,
+    score,
+    threshold: BLOCK_SCORE_THRESHOLD,
+  };
   try {
-    const e = await chrome.tabs.sendMessage(t, { type: "EXTRACT_PAGE" });
-    if (e?.ok && e.summary) return e.summary;
+    await chrome.tabs.sendMessage(tabId, message);
   } catch {
+    // Content script may not be injected yet — inject and retry
     try {
       await chrome.scripting.executeScript({
-        target: { tabId: t },
+        target: { tabId },
         files: ["contentScript.js"],
       });
-      const e = await chrome.tabs.sendMessage(t, { type: "EXTRACT_PAGE" });
-      if (e?.ok && e.summary) return e.summary;
+      await chrome.tabs.sendMessage(tabId, message);
+    } catch { /* tab may have closed */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Page evaluation
+// ---------------------------------------------------------------------------
+async function evaluatePage(pageSummary, tabId) {
+  const session = await loadSession();
+  if (!session || isBrowserInternalUrl(pageSummary.url)) return;
+  try {
+    const pageEmbedding = await embedText(pageSummary.text);
+    if (!pageEmbedding.length) return;
+
+    const score = similarityToAlignmentScore(session.goalEmbedding, pageEmbedding);
+    const pageEvent = {
+      id: crypto.randomUUID(),
+      sessionId: session.sessionId,
+      timestamp: Date.now(),
+      url: pageSummary.url,
+      domain: extractDomain(pageSummary.url),
+      score,
+      driftState: session.driftState,
+    };
+
+    let updatedSession = appendPageEvent(session, pageEvent);
+    const driftResult = evaluateDriftState(updatedSession);
+
+    pageEvent.driftState = driftResult.driftState;
+    updatedSession = {
+      ...updatedSession,
+      driftState: driftResult.driftState,
+      recentEvents: [...updatedSession.recentEvents.slice(0, -1), pageEvent],
+    };
+
+    await saveSession(updatedSession);
+    logPageEvent(pageEvent);
+    flushAnalyticsQueue();
+
+    if (driftResult.shouldNotify) {
+      logDriftEvent(
+        session.sessionId,
+        driftResult.triggerReason ?? "Sustained low-alignment browsing",
+      );
+      await sendDriftNotification(updatedSession);
+    }
+
+    if (tabId && score < BLOCK_SCORE_THRESHOLD) {
+      await sendBlockMessage(tabId, updatedSession, score);
+    }
+  } catch (err) {
+    console.warn("Intent Lock: skipped page summary after processing error", err);
+  }
+}
+
+async function extractPageSummary(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE" });
+    if (response?.ok && response.summary) return response.summary;
+  } catch {
+    // Inject content script and retry
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["contentScript.js"],
+      });
+      const response = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE" });
+      if (response?.ok && response.summary) return response.summary;
     } catch {
       return null;
     }
   }
   return null;
 }
-async function I() {
-  if (!(await m())) return;
-  const [e] = await chrome.tabs.query({ active: !0, currentWindow: !0 });
-  if (!e?.id || x(e.url)) return;
-  const n = await ht(e.id);
-  n && (await H(n, e.id));
+
+async function evaluateActiveTab() {
+  if (!(await loadSession())) return;
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!activeTab?.id || isBrowserInternalUrl(activeTab.url)) return;
+  const summary = await extractPageSummary(activeTab.id);
+  if (summary) await evaluatePage(summary, activeTab.id);
 }
-chrome.runtime.onMessage.addListener(
-  (t, e, n) => (
-    (async () => {
-      if (t.type === "START_SESSION") return ft(t.goal);
-      if (t.type === "STOP_SESSION") return mt();
-      if (t.type === "GET_STATE") {
-        const r = await m();
-        return { ok: !0, session: r, analytics: E(r) };
-      }
-      if (t.type === "PAGE_SUMMARY") {
-        await H(t.summary);
-        const r = await m();
-        return { ok: !0, session: r, analytics: E(r) };
-      }
-      return { ok: !1, error: "Unknown message type." };
-    })()
-      .then(n)
-      .catch((r) =>
-        n({
-          ok: !1,
-          error: r instanceof Error ? r.message : "Unexpected error",
-        }),
-      ),
-    !0
-  ),
-);
-chrome.tabs.onActivated.addListener(() => {
-  I();
+
+// ---------------------------------------------------------------------------
+// Message handler
+// ---------------------------------------------------------------------------
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  (async () => {
+    if (message.type === "START_SESSION") return startSession(message.goal);
+    if (message.type === "STOP_SESSION")  return stopSession();
+    if (message.type === "GET_STATE") {
+      const session = await loadSession();
+      return { ok: true, session, analytics: computeAnalytics(session) };
+    }
+    if (message.type === "PAGE_SUMMARY") {
+      await evaluatePage(message.summary);
+      const session = await loadSession();
+      return { ok: true, session, analytics: computeAnalytics(session) };
+    }
+    return { ok: false, error: "Unknown message type." };
+  })()
+    .then(sendResponse)
+    .catch((err) =>
+      sendResponse({
+        ok: false,
+        error: err instanceof Error ? err.message : "Unexpected error",
+      }),
+    );
+  return true; // keep message channel open for async response
 });
-chrome.tabs.onUpdated.addListener((t, e, n) => {
-  e.status === "complete" && n.active && I();
+
+// ---------------------------------------------------------------------------
+// Tab event listeners
+// ---------------------------------------------------------------------------
+chrome.tabs.onActivated.addListener(() => evaluateActiveTab());
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" && tab.active) evaluateActiveTab();
 });
-chrome.notifications.onButtonClicked.addListener((t, e) => {
-  t === w &&
-    (async () => {
-      const n = await m();
-      n &&
-        (e === 0 &&
-          (await h({
-            ...n,
-            driftState: "ACTIVE_FOCUS",
-            notificationCooldownUntil: Date.now() + F,
-          })),
-        e === 1 &&
-          (await h({
-            ...n,
-            notificationCooldownUntil: Date.now() + 300 * 1e3,
-          })),
-        await chrome.notifications.clear(w));
-    })();
+
+// ---------------------------------------------------------------------------
+// Notification button handlers
+// ---------------------------------------------------------------------------
+chrome.notifications.onButtonClicked.addListener((notifId, buttonIndex) => {
+  if (notifId !== DRIFT_NOTIFICATION_ID) return;
+  (async () => {
+    const session = await loadSession();
+    if (!session) return;
+    if (buttonIndex === 0) {
+      // "Continue intentionally" — reset drift, apply cooldown
+      await saveSession({
+        ...session,
+        driftState: "ACTIVE_FOCUS",
+        notificationCooldownUntil: Date.now() + NOTIFICATION_COOLDOWN_MS,
+      });
+    } else if (buttonIndex === 1) {
+      // "5-minute detour" — extend cooldown only
+      await saveSession({
+        ...session,
+        notificationCooldownUntil: Date.now() + 300 * 1000,
+      });
+    }
+    await chrome.notifications.clear(DRIFT_NOTIFICATION_ID);
+  })();
 });
-chrome.notifications.onClicked.addListener((t) => {
-  t === w && chrome.action.openPopup();
+
+chrome.notifications.onClicked.addListener((notifId) => {
+  if (notifId === DRIFT_NOTIFICATION_ID) chrome.action.openPopup();
 });
